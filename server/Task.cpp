@@ -2,31 +2,31 @@
 
 #include <iostream>
 
-Task::Task(std::shared_ptr<ThreadPool> thread_pool, std::shared_ptr<boost::asio::ip::tcp::socket> socket)
-    : m_task_thread_pool(std::move(thread_pool))
+Task::Task(std::shared_ptr<ThreadPool> fast_task_thread_pool,
+    std::shared_ptr<ThreadPool> slow_task_thread_pool,
+    std::shared_ptr<boost::asio::ip::tcp::socket> socket)
+    : m_fast_task_thread_pool(std::move(fast_task_thread_pool))
+    , m_slow_task_thread_pool(std::move(slow_task_thread_pool))
     , m_sock(std::move(socket))
 {
 
 }
 
-uint64_t Task::handle_task(const std::string& request)
+TaskFuture<uint64_t> Task::handle_task(const std::string& request)
 {
     check_session();
 
-    const auto task_cat = get_task_type(request);
+    const auto task_category = get_task_type(request);
     auto tasks_count = get_data_from_request_string(request);
 
-    switch (task_cat)
+    switch (task_category)
     {
         case task_category::slow:
         {
-            uint64_t result = 0;
-            for (uint32_t i = 0; i < tasks_count; ++i)
+            return m_slow_task_thread_pool->submit([this, tasks_count]
             {
-                result += emulate_task(tasks_count);
-            }
-
-            return result;
+                return emulate_task(tasks_count);
+            });
         }
 
         case task_category::fast:
@@ -38,7 +38,7 @@ uint64_t Task::handle_task(const std::string& request)
 
                 for (uint32_t i = 0; i < tasks_count; ++i)
                 {
-                    results.emplace(m_task_thread_pool->submit([this, tasks_count]
+                    results.emplace(m_fast_task_thread_pool->submit([this, tasks_count]
                     {
                         return emulate_task(tasks_count);
                     }));
@@ -55,11 +55,13 @@ uint64_t Task::handle_task(const std::string& request)
                 std::cout << exception.what() << std::endl;
             }
 
-            return result;
+            std::promise<uint64_t> promise;
+            promise.set_value(result);
+            return TaskFuture<uint64_t>(promise.get_future());
         }
     }
 
-    return 0;
+    return TaskFuture<uint64_t>(std::future<uint64_t>());
 }
 
 void Task::check_session()

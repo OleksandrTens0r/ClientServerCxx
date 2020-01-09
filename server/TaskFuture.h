@@ -24,6 +24,11 @@ public:
         }
     }
 
+    bool is_ready()
+    {
+        return m_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    }
+
     auto get()
     {
         return m_future.get();

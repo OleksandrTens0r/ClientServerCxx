@@ -9,8 +9,11 @@
 class Task
 {
 public:
-    Task(std::shared_ptr<ThreadPool> thread_pool, std::shared_ptr<boost::asio::ip::tcp::socket> socket);
-    uint64_t handle_task(const std::string& request);
+    Task(std::shared_ptr<ThreadPool> fast_task_thread_pool,
+        std::shared_ptr<ThreadPool> slow_task_thread_pool,
+        std::shared_ptr<boost::asio::ip::tcp::socket> socket);
+
+    TaskFuture<uint64_t> handle_task(const std::string& request);
 
 private:
     void check_session();
@@ -20,7 +23,9 @@ private:
     static uint32_t get_data_from_request_string(const std::string& request);
 
 private:
-    std::shared_ptr<ThreadPool> m_task_thread_pool;
+    std::shared_ptr<ThreadPool> m_fast_task_thread_pool;
+    std::shared_ptr<ThreadPool> m_slow_task_thread_pool;
+
     std::shared_ptr<boost::asio::ip::tcp::socket> m_sock;
     std::mutex m_socket_mtx;
 };

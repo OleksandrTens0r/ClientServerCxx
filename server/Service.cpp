@@ -9,7 +9,8 @@
 
 Service::Service()
 {
-    m_task_thread_pool = std::make_shared<ThreadPool>();
+    m_fats_task_thread_pool = std::make_shared<ThreadPool>();
+    m_slow_task_thread_pool = std::make_shared<ThreadPool>();
     m_client_handler_thread = std::thread(&Service::handle_tasks, this);
 }
 
@@ -23,10 +24,10 @@ Service::~Service()
 
 void Service::start_handling_client(std::shared_ptr<boost::asio::ip::tcp::socket> sock)
 {
-    m_client_tasks.push(m_client_thread_pool.submit([this, sock] { handle_client(sock); }));
+    m_client_tasks.push(std::make_shared<TaskFuture<Response>>(m_client_thread_pool.submit([this, sock] { return handle_client(sock); })));
 }
 
-void Service::handle_client(std::shared_ptr<boost::asio::ip::tcp::socket> sock) const
+Response Service::handle_client(std::shared_ptr<boost::asio::ip::tcp::socket> sock) const
 {
     try
     {
@@ -35,11 +36,8 @@ void Service::handle_client(std::shared_ptr<boost::asio::ip::tcp::socket> sock) 
 
         if (is_session_alive(sock))
         {
-            Task task(m_task_thread_pool, sock);
-            const auto response = std::to_string(task.handle_task(get_string_from_buffer(request)));
-
-            // possible listen client for new messages
-            write(*sock.get(), boost::asio::buffer(response + message_delimiter));
+            Task task(m_fats_task_thread_pool, m_slow_task_thread_pool, sock);
+            return { task.handle_task(get_string_from_buffer(request)), sock};
         }
     }
     catch (boost::system::system_error& /* error */)
@@ -50,14 +48,28 @@ void Service::handle_client(std::shared_ptr<boost::asio::ip::tcp::socket> sock) 
     {
         // session was canceled TODO create custom exception type
     }
+
+    return { TaskFuture<uint64_t>(std::future<uint64_t>()), sock};
 }
 
 void Service::handle_tasks()
 {
     while (true)
     {
-        TaskFuture<void> task = std::future<void>();
-        m_client_tasks.wait_pop(task);
-        task.get();
+        std::shared_ptr<TaskFuture<Response>> task;
+        if (m_client_tasks.wait_pop(task))
+        {
+            if (task.get()->is_ready())
+            {
+                auto response = task.get()->get();
+                const auto data = response.future.get();
+                write(*response.sock.get(), boost::asio::buffer(std::to_string(data) + message_delimiter));
+            }
+            else
+            {
+                m_client_tasks.push(task);
+            }
+
+        }
     }
 }
